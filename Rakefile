@@ -12,6 +12,7 @@ require 'yaml'
 CONFIG = YAML.load(File.read('_config.yml'))
 USERNAME = CONFIG["username"] || ENV['GIT_NAME']
 REPO = CONFIG["repo"] || "#{USERNAME}.github.io"
+DESTINATION = CONFIG["destination"] || "."
 
 # Determine source and destination branch
 # User or organization: source -> master
@@ -87,8 +88,18 @@ def parameterize(string, sep = '-')
 end
 
 def check_destination
-  unless Dir.exist? CONFIG["destination"]
-    sh "git clone https://#{ENV['GIT_NAME']}:#{ENV['GH_TOKEN']}@github.com/#{USERNAME}/#{REPO}.git #{CONFIG["destination"]}"
+  Dir.mkdir(DESTINATION) unless Dir.exist? DESTINATION
+  Dir.chdir(DESTINATION) do
+    sh "git init"
+    sh "git remote add upstream https://#{ENV['GIT_NAME']}:#{ENV['GH_TOKEN']}@github.com/#{USERNAME}/#{REPO}.git"
+    sh "git fetch upstream"
+    sh "git reset upstream/#{DESTINATION_BRANCH}"
+  end
+end
+
+def clean_destination
+  Dir.chdir(DESTINATION) do
+    sh "git remote remove upstream"
   end
 end
 
@@ -197,29 +208,32 @@ namespace :site do
       exit
     end
 
-    # Configure git if this is run in Travis CI
-    if ENV["TRAVIS"]
-      sh "git config --global user.name '#{ENV['GIT_NAME']}'"
-      sh "git config --global user.email '#{ENV['GIT_EMAIL']}'"
-      sh "git config --global push.default simple"
-    end
+    # Generate the site
+    sh "bundle exec jekyll build"
 
     # Make sure destination folder exists as git repo
     check_destination
 
-    sh "git checkout #{SOURCE_BRANCH}"
-    Dir.chdir(CONFIG["destination"]) { sh "git checkout #{DESTINATION_BRANCH}" }
+    # Configure git if this is run in Travis CI
+    if ENV["TRAVIS"]
+      Dir.chdir(DESTINATION) do
+        sh "git config user.name '#{ENV['GIT_NAME']}'"
+        sh "git config user.email '#{ENV['GIT_EMAIL']}'"
+        sh "git config push.default simple"
+      end
+    end
 
-    # Generate the site
-    sh "bundle exec jekyll build"
+    sh "git checkout #{SOURCE_BRANCH}"
 
     # Commit and push to github
     sha = `git log`.match(/[a-z0-9]{40}/)[0]
-    Dir.chdir(CONFIG["destination"]) do
+    Dir.chdir(DESTINATION) do
       sh "git add --all ."
       sh "git commit -m 'Updating to #{USERNAME}/#{REPO}@#{sha}.'"
-      sh "git push --quiet origin #{DESTINATION_BRANCH}"
+      sh "git push --quiet upstream HEAD:#{DESTINATION_BRANCH}"
       puts "Pushed updated branch #{DESTINATION_BRANCH} to GitHub Pages"
     end
+
+    clean_destination
   end
 end
